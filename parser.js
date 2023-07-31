@@ -134,6 +134,38 @@ function findTests(ast) {
   return { tests, hooks };
 }
 
+function maybeGetLiteralValue(node) {
+  if (node.type === 'Literal') {
+    return node.value;
+  } else if (node.type === 'ObjectExpression') {
+    // Try to see if all values can be mapped to literals
+    // WARN: this would probably go brrrrr if object has cyclic references
+    const output = {};
+    for (let i = 0; i < node.properties.length; i++) {
+      let prop = node.properties[i];
+      let key = getPropertyKey(prop);
+      let value = maybeGetLiteralValue(prop.value);
+      if (!key || !value) {
+        return undefined;
+      }
+      output[key] = value;
+    }
+    return output;
+  } else if (node.type === 'ArrayExpression') {
+    const output = [];
+    for (let i = 0; i < node.elements.length; i++) {
+      let value = maybeGetLiteralValue(node.elements[i]);
+      if (!value) {
+        return undefined;
+      }
+      output.push(value);
+    }
+    return output;
+  }
+
+  return undefined;
+}
+
 function findFuncCalls(ast, nameFilter) {
   let calls = [];
   walk.ancestor(ast, {
@@ -153,9 +185,10 @@ function findFuncCalls(ast, nameFilter) {
         const literalArguments = {};
         let hasLiteralArguments = false;
         node.arguments.forEach((a, i) => {
-          if (a.type === 'Literal') {
+          const value = maybeGetLiteralValue(a);
+          if (value) {
             hasLiteralArguments = true;
-            literalArguments[i] = a.value;
+            literalArguments[i] = value;
           }
         });
 
