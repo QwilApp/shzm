@@ -1,0 +1,19 @@
+{
+  "name": "shzm",
+  "version": "0.0.1",
+  "description": "Parses Detox/Jest test files to extract test definitions and helper functions",
+  "main": "index.js",
+  "repository": "git@github.com:QwilApp/shzm.git",
+  "author": "Shawn Chin",
+  "license": "MIT",
+  "private": false,
+  "bin": {
+    "shzm": "./index.js"
+  },
+  "dependencies": {
+    "acorn": "^8.8.1",
+    "acorn-walk": "^8.2.0",
+    "commander": "^9.5.0",
+    "glob": "^8.0.3"
+  }
+}
