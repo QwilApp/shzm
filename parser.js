@@ -50,6 +50,10 @@ function findTests(ast) {
     walk.ancestor(ast, {
       CallExpression: function(node, ancestors) {
         const dottedName = parseCallee(node);
+        if (!dottedName) {  // some funky call syntax that we don't yet support
+          return;
+        }
+
         if (isTestIdentifier(dottedName)) {
           let funcNode = node.arguments[1];
 
@@ -211,15 +215,15 @@ function findExportedFunc(ast) {
     // - it is either explicitly export, or matches default export
     registerExportedArrowFuncNode({
       node: node.declarations[0],
-      exportStart: exportStart || exportDefaultDeclaration.start,
-      exportEnd: exportEnd || exportDefaultDeclaration.end,
+      exportStart: exportStart !== undefined ? exportStart : exportDefaultDeclaration.start,
+      exportEnd: exportEnd !== undefined ? exportEnd : exportDefaultDeclaration.end,
       start,
       end
     })
   }
 
   ast.body.forEach(node => {
-    if (node.type === 'ExportNamedDeclaration') {
+    if (node.type === 'ExportNamedDeclaration' && node.declaration) {
       if (node.declaration.type === 'FunctionDeclaration') {
         // Handle "export async function a() {}"
         registerExportedFuncNode({
@@ -265,8 +269,12 @@ function findFuncCalls(ast) {
   let calls = [];
   walk.ancestor(ast, {
     CallExpression: function (node, ancestors) {
+
       const parent = ancestors.length > 1 ? ancestors.at(-2) : null;
       const dottedName = parseCallee(node);
+      if (!dottedName) {  // some funky call syntax that we don't yet support
+        return;
+      }
 
       const arguments = node.arguments.map(a => {
         return {  // simply return type and position of each argument so caller can target and parse if required
@@ -338,8 +346,11 @@ function maybeGetLiteralValue(node) {
     for (let i = 0; i < node.properties.length; i++) {
       let prop = node.properties[i];
       let key = getPropertyKey(prop);
+      if (!key) {
+        return undefined;
+      }
       let value = maybeGetLiteralValue(prop.value);
-      if (!key || !value) {
+      if (!value) {
         return undefined;
       }
       output[key] = value;
@@ -372,7 +383,9 @@ function assertPropertyNodeIsLiteralBooleanAndExtract(node, errors) {
 }
 
 function getPropertyKey(propNode) {
-  if (propNode.key.type === 'Literal') {
+  if (!propNode.key) {
+    return undefined;
+  } else if (propNode.key.type === 'Literal') {
     return propNode.key.value;
   } else if (propNode.key.type === 'Identifier') {
     return propNode.key.name;
@@ -445,14 +458,16 @@ function parseCallee(node) {
     }
   }
 
-  function _traverse(_node, suffix = '') {
+  function _traverse(_node) {
     switch (_node.type) {
       case 'Identifier':
         return _node.name;
       case 'MemberExpression':
-        return _traverse(_node.object) + '.' + _node.property.name + suffix;
+        return _traverse(_node.object) + '.' + _node.property.name;
       case 'CallExpression':
-        return _traverse(_node.callee, '()');
+        return _traverse(_node.callee) + '()';
+      case 'ThisExpression':
+        return 'this';
       default:
         /**
          * calls could be chained to many other types, e.g.:

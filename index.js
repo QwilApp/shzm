@@ -21,9 +21,9 @@ async function main() {
     .addHelpText("after", `
 Examples:
 
-  ${binName} dump ./e2e/tests  # look for tests in all *.spec.js files under ./e2e/tests dir
-  ${binName} dump ./e2e/tests ./e2e/uat  # specify multiple dirs
-  ${binName} dump ./e22/tests/a.spec.js  # parse a single file
+  ${binName} tests ./e2e/tests  # look for tests in all *.spec.js files under ./e2e/tests dir
+  ${binName} tests ./e2e/tests ./e2e/uat  # specify multiple dirs
+  ${binName} tests ./e22/tests/a.spec.js  # parse a single file
     `)
     .argument('<file_or_dir...>', 'files or dirs to parse')
     .action(async (paths) => {
@@ -35,9 +35,9 @@ Examples:
     .addHelpText("after", `
 Examples:
 
-  ${binName} dump ./e2e/support  # look for exported functions in all *.js files under ./e2e/support dir
-  ${binName} dump ./e2e/support ./e2e/api  # specify multiple dirs
-  ${binName} dump ./e22/support/a.spec.js  # parse a single file
+  ${binName} functions ./e2e/support  # look for exported functions in all *.js files under ./e2e/support dir
+  ${binName} functions ./e2e/support ./e2e/api  # specify multiple dirs
+  ${binName} functions ./e22/support/a.spec.js  # parse a single file
     `)
     .argument('<file_or_dir...>', 'files or dirs to parse')
     .action(async (paths) => {
@@ -51,6 +51,7 @@ async function parseAndDumpTests(paths) {
   const filenames = resolvePaths(paths, ".spec.js");
   let out = {};
   for (const filename of filenames) {
+    // console.log(filename)
     try {
       out[filename] = findTests(
         await readFileAndParseAST(path.resolve(filename))
@@ -70,6 +71,7 @@ async function parseAndDumpFuncExports(paths) {
   const filenames = resolvePaths(paths, ".js");
   let out = {};
   for (const filename of filenames) {
+    // console.log(filename)
     try {
       out[filename] = findExportedFunc(
         await readFileAndParseAST(path.resolve(filename))
