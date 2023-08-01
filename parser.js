@@ -134,6 +134,200 @@ function findTests(ast) {
   return { tests, hooks };
 }
 
+function findExportedFunc(ast) {
+  /**
+   * For simplicity, we only support these forms of func declarations + exports:
+   *   export async function a() {}
+   *
+   *   export const b = async () => {};
+   *
+   *   const c = async () => {};
+   *   export default c;
+   *
+   *   async function d() => {};
+   *   export default d;
+   */
+  // First, determine if these is a default export based on identifier (e.g. "export default x;")
+  const exportDefaultDeclaration = ast.body.find(n => n.type === 'ExportDefaultDeclaration' && n.declaration.type === 'Identifier');
+  const defaultExportedIdentifier = exportDefaultDeclaration ? exportDefaultDeclaration.declaration.name : undefined;
+
+  const exportedFunctions = [];
+
+  function registerExportedFuncNode({ node, exportStart, exportEnd, start, end }) {
+    exportedFunctions.push({
+      name: node.id.name,
+      start, // start of full declaration
+      end, // end of full declaration
+      exportStart, // start of statement where export happened. Could be the same as "start"
+      exportEnd, // end of statement where export happened. Could be the same as "end"
+      funcStart: node.body.start, // start of function implementation body
+      funcEnd: node.body.end, // end of function implementation body
+      async: node.async,
+      calls: findFuncCalls(node.body)
+    })
+  }
+
+  function registerExportedArrowFuncNode({ node, exportStart, exportEnd, start, end }) {
+    assert(node.type === 'VariableDeclarator', 'registerExportedArrowFuncNode should be called with VariableDeclarator node');
+    const funcNode = node.init;
+    assert(funcNode.type === 'ArrowFunctionExpression', 'registerExportedArrowFuncNode should only be used for arrow func declarations');
+
+    exportedFunctions.push({
+      name: node.id.name,
+      start, // start of full declaration
+      end, // end of full declaration
+      exportStart, // start of statement where export happened. Could be the same as "start"
+      exportEnd, // end of statement where export happened. Could be the same as "end"
+      funcStart: funcNode.body.start, // start of function implementation body
+      funcEnd: funcNode.body.end, // end of function implementation body
+      async: funcNode.async,
+      calls: findFuncCalls(funcNode.body)
+    })
+  }
+
+  function maybeRegisterVariableDeclarations({ node, exportStart, exportEnd, start, end }) {
+    const isExported = exportStart !== undefined;
+    const hasArrowFuncDeclaration = node.declarations.find(d => d.init.type === 'ArrowFunctionExpression');
+    const hasIdentMatchingDefaultExport = defaultExportedIdentifier && node.declarations.find(d => d.id.name === defaultExportedIdentifier);
+    if (!hasArrowFuncDeclaration) {
+      return;
+    }
+
+    if (!isExported && !hasIdentMatchingDefaultExport) {
+      return;
+    }
+
+    if (node.declarations.length > 1) {
+      // For simplicity, reject func export that is part of a multi-var decl e.g. "export const x = () => {}, y = 100"
+      throw new ParseLimitationsError(
+        'No support for function export within multi-variable declaration',
+        node.declarations[1].start
+      )
+    }
+
+    // at this point, we know that
+    // - only one declaration
+    // - it is an arrow function
+    // - it is either explicitly export, or matches default export
+    registerExportedArrowFuncNode({
+      node: node.declarations[0],
+      exportStart: exportStart || exportDefaultDeclaration.start,
+      exportEnd: exportEnd || exportDefaultDeclaration.end,
+      start,
+      end
+    })
+  }
+
+  ast.body.forEach(node => {
+    if (node.type === 'ExportNamedDeclaration') {
+      if (node.declaration.type === 'FunctionDeclaration') {
+        // Handle "export async function a() {}"
+        registerExportedFuncNode({
+          node: node.declaration,
+          exportStart: node.start,
+          exportEnd: node.end,
+          start: node.start,
+          end: node.end
+        });
+      } else if (node.declaration.type === 'VariableDeclaration' && node.declaration.kind === 'const') {
+        // Maybe handle "export const b = async () => {};"
+        maybeRegisterVariableDeclarations({
+          node: node.declaration,
+          exportStart: node.start,
+          exportEnd: node.end,
+          start: node.start,
+          end: node.end
+        })
+      }
+    } else if (node.type === 'VariableDeclaration' && node.kind === 'const') {
+      // Maybe handle "const c = async () => {};" if "c" identifier was default exported
+      maybeRegisterVariableDeclarations({
+        node: node,
+        start: node.start,
+        end: node.end
+      })
+    } else if (node.type === 'FunctionDeclaration' && defaultExportedIdentifier && node.id.name === defaultExportedIdentifier) {
+      // Maybe handle "async function d() => {}" if "d" identifier was default exported
+      registerExportedFuncNode({
+        node: node,
+        exportStart: exportDefaultDeclaration.start,
+        exportEnd: exportDefaultDeclaration.end,
+        start: node.start,
+        end: node.end
+      });
+    }
+  });
+
+  return { exportedFunctions };
+}
+
+function findFuncCalls(ast) {
+  let calls = [];
+  walk.ancestor(ast, {
+    CallExpression: function (node, ancestors) {
+      const parent = ancestors.length > 1 ? ancestors.at(-2) : null;
+      const dottedName = parseCallee(node);
+
+      const arguments = node.arguments.map(a => {
+        return {  // simply return type and position of each argument so caller can target and parse if required
+          type: a.type,
+          start: a.start,
+          end: a.end,
+        }
+      });
+
+      const literalArguments = {};
+      let hasLiteralArguments = false;
+      node.arguments.forEach((a, i) => {
+        const value = maybeGetLiteralValue(a);
+        if (value) {
+          hasLiteralArguments = true;
+          literalArguments[i] = value;
+        }
+      });
+
+      /* special handling of api({ sync: ?? }).regionCall(...) calls */
+      let errors = [];
+      let apiSyncDisabled = false;
+      let apiWaitAfter = false;
+      if (dottedName === 'api') {  // will be handled in chained call
+        return;
+      } else if (dottedName.startsWith('api.')) {
+        // In the case of api.central.*, type would be 'memberExpression' and apiArguments will be false
+        const apiArguments = node.callee.object.type === 'CallExpression' && node.callee.object.arguments;
+        if (apiArguments && apiArguments.length > 0 && apiArguments[0].type === 'ObjectExpression') {
+          apiArguments[0].properties.forEach(argProp => {
+            if (getPropertyKey(argProp) === 'sync' ) {
+              if (assertPropertyNodeIsLiteralBooleanAndExtract(argProp, errors) === false) {
+                apiSyncDisabled = true;
+              }
+            }
+            if (getPropertyKey(argProp) === 'waitAfter') {
+              if (assertPropertyNodeIsLiteralBooleanAndExtract(argProp, errors) === true) {
+                apiWaitAfter = true;
+              }
+            }
+          });
+        }
+      }
+      calls.push({
+        name: dottedName,
+        start: node.callee.property ? node.callee.property.start : node.start,
+        rootStart: node.start, // if chained calls, this != start
+        end: node.end,  // end at the end of the full call, including params and inner func.
+        arguments: arguments,
+        await: parent && parent.type === 'AwaitExpression',
+        ...(hasLiteralArguments ? { literalArguments } : null),
+        ...(apiSyncDisabled ? { apiSyncDisabled } : null),
+        ...(apiWaitAfter ? { apiWaitAfter } : null),
+        ...(errors.length > 0 ? { errors } : null)
+
+      })
+    },
+  });
+  return calls;
+}
+
 function maybeGetLiteralValue(node) {
   if (node.type === 'Literal') {
     return node.value;
@@ -164,76 +358,6 @@ function maybeGetLiteralValue(node) {
   }
 
   return undefined;
-}
-
-function findFuncCalls(ast, nameFilter) {
-  let calls = [];
-  walk.ancestor(ast, {
-    CallExpression: function (node, ancestors) {
-      const parent = ancestors.length > 1 ? ancestors.at(-2) : null;
-      const dottedName = parseCallee(node);
-      if (nameFilter && !nameFilter(dottedName)) {
-        // this call should be ignored. so do nothing.
-      } else {
-        const arguments = node.arguments.map(a => {
-          return {  // simply return type and position of each argument so caller can target and parse if required
-            type: a.type,
-            start: a.start,
-            end: a.end,
-          }
-        });
-        const literalArguments = {};
-        let hasLiteralArguments = false;
-        node.arguments.forEach((a, i) => {
-          const value = maybeGetLiteralValue(a);
-          if (value) {
-            hasLiteralArguments = true;
-            literalArguments[i] = value;
-          }
-        });
-
-        /* special handling of api({ sync: ?? }).regionCall(...) calls */
-        let errors = [];
-        let apiSyncDisabled = false;
-        let apiWaitAfter = false;
-        if (dottedName === 'api') {  // will be handled in chained call
-          return;
-        } else if (dottedName.startsWith('api.')) {
-          // In the case of api.central.*, type would be 'memberExpression' and apiArguments will be false
-          const apiArguments = node.callee.object.type === 'CallExpression' && node.callee.object.arguments;
-          if (apiArguments && apiArguments.length > 0 && apiArguments[0].type === 'ObjectExpression') {
-            apiArguments[0].properties.forEach(argProp => {
-              if (getPropertyKey(argProp) === 'sync' ) {
-                if (assertPropertyNodeIsLiteralBooleanAndExtract(argProp, errors) === false) {
-                  apiSyncDisabled = true;
-                }
-              }
-              if (getPropertyKey(argProp) === 'waitAfter') {
-                if (assertPropertyNodeIsLiteralBooleanAndExtract(argProp, errors) === true) {
-                  apiWaitAfter = true;
-                }
-              }
-            });
-          }
-        }
-        console.log(JSON.stringify(arguments, null, 2));
-        calls.push({
-          name: dottedName,
-          start: node.callee.property ? node.callee.property.start : node.start,
-          rootStart: node.start, // if chained calls, this != start
-          end: node.end,  // end at the end of the full call, including params and inner func.
-          arguments: arguments,
-          await: parent && parent.type === 'AwaitExpression',
-          ...(hasLiteralArguments ? { literalArguments } : null),
-          ...(apiSyncDisabled ? { apiSyncDisabled } : null),
-          ...(apiWaitAfter ? { apiWaitAfter } : null),
-          ...(errors.length > 0 ? { errors } : null)
-
-        })
-      }
-    },
-  });
-  return calls;
 }
 
 function assertPropertyNodeIsLiteralBooleanAndExtract(node, errors) {
@@ -345,8 +469,19 @@ function parseCallee(node) {
   }
 }
 
+/**
+ * Thrown when the code being parsed is technically valid, but breaks an assumption or restriction imposed by this lib.
+ */
+class ParseLimitationsError extends Error {
+  constructor(message, atChar) {
+    super(message);
+    this.name = 'ParseLimitationsError';
+    this.atChar = atChar;
+  }
+}
 
 module.exports = {
   findTests,
+  findExportedFunc,
   readFileAndParseAST,
 }
