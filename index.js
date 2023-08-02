@@ -17,7 +17,7 @@ async function main() {
     .version(pjs.version)
 
   program.command('tests')
-    .description('Parses spec files and dumps results to stdout as JSON')
+    .description('Parses spec files to local tests definitions, and dumps results to stdout as JSON')
     .addHelpText("after", `
 Examples:
 
@@ -31,7 +31,7 @@ Examples:
     })
 
   program.command('functions')
-    .description('Parses js files to local exported functions and dumps results to stdout as JSON')
+    .description('Parses js files to local exported functions, and dumps results to stdout as JSON')
     .addHelpText("after", `
 Examples:
 
@@ -42,6 +42,20 @@ Examples:
     .argument('<file_or_dir...>', 'files or dirs to parse')
     .action(async (paths) => {
       await parseAndDumpFuncExports(paths);
+    })
+
+  program.command('dump')
+    .description('Combination of "tests" and "functions", i.e. parses everything and dumps to JSON')
+    .addHelpText("after", `
+Examples:
+
+  ${binName} dump ./e2e  # look for tests and exported functions in all *.js files under ./e2e dir
+  ${binName} dump ./e2e/tests ./e2e/api  # specify multiple dirs
+  ${binName} dump ./e22/support/a.spec.js  # parse a single file
+    `)
+    .argument('<file_or_dir...>', 'files or dirs to parse')
+    .action(async (paths) => {
+      await parseAndDumpAll(paths);
     })
 
   program.parse();
@@ -76,6 +90,30 @@ async function parseAndDumpFuncExports(paths) {
       out[filename] = findExportedFunc(
         await readFileAndParseAST(path.resolve(filename))
       );
+    } catch (e) {
+      if (e.name === 'ParseLimitationsError') {
+        handleParseLimitationsError(e);
+      } else {
+        throw e;
+      }
+    }
+  }
+  console.log(JSON.stringify(out, null, 2));
+}
+
+async function parseAndDumpAll(paths) {
+  const filenames = resolvePaths(paths, ".js");
+  let out = {};
+  for (const filename of filenames) {
+    // console.log(filename)
+    try {
+      const funcDump = findExportedFunc(
+        await readFileAndParseAST(path.resolve(filename))
+      );
+      const testDump = findTests(
+        await readFileAndParseAST(path.resolve(filename))
+      );
+      out[filename] = { ...funcDump, ...testDump };
     } catch (e) {
       if (e.name === 'ParseLimitationsError') {
         handleParseLimitationsError(e);
