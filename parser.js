@@ -83,6 +83,7 @@ function findTests(ast) {
             funcStart: funcNode.start,
             funcEnd: funcNode.end,
             calls: findFuncCalls(funcNode),
+            tryStatements: findTry(funcNode),
             ...(scope.some((n) => n.skip) && { skip: true }),
             ...(scope.some((n) => n.only) && { only: true }),
             ...(scope.some((n) => n.iosOnly) && { iosOnly: true }),
@@ -129,6 +130,7 @@ function findTests(ast) {
             funcStart: funcNode.start,
             funcEnd: funcNode.end,
             calls: findFuncCalls(funcNode),
+            tryStatements: findTry(funcNode),
           })
         }
       }
@@ -263,6 +265,16 @@ function findExportedFunc(ast) {
   });
 
   return { functions: exportedFunctions };
+}
+
+function findTry(ast) {
+  tries = []
+  walk.simple(ast, {
+    TryStatement: function (node) {
+      tries.push({ start: node.start, end:  node.end })
+    }
+  })
+  return tries;
 }
 
 function findFuncCalls(ast) {
