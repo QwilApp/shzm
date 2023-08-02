@@ -434,7 +434,7 @@ function isAndroidOnly(ident) {
 }
 
 function isOnly(ident) {
-  return ident.endsWith('.only') || isIosOnly(ident) || isAndroidOnly(ident);
+  return ident.endsWith('.only');
 }
 
 function IgnoreMe(node) {
