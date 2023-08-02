@@ -312,10 +312,9 @@ function findFuncCalls(ast) {
       let apiWaitAfter = false;
       if (dottedName === 'api') {  // will be handled in chained call
         return;
-      } else if (dottedName.startsWith('api.')) {
-        // In the case of api.central.*, type would be 'memberExpression' and apiArguments will be false
-        const apiArguments = node.callee.object.type === 'CallExpression' && node.callee.object.arguments;
-        if (apiArguments && apiArguments.length > 0 && apiArguments[0].type === 'ObjectExpression') {
+      } else if (dottedName.startsWith('api().')) {
+        const apiArguments = node.callee.object.arguments;
+        if (apiArguments.length > 0 && apiArguments[0].type === 'ObjectExpression') {
           apiArguments[0].properties.forEach(argProp => {
             if (getPropertyKey(argProp) === 'sync' ) {
               if (assertPropertyNodeIsLiteralBooleanAndExtract(argProp, errors) === false) {
