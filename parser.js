@@ -262,7 +262,7 @@ function findExportedFunc(ast) {
     }
   });
 
-  return { exportedFunctions };
+  return { functions: exportedFunctions };
 }
 
 function findFuncCalls(ast) {
@@ -324,7 +324,7 @@ function findFuncCalls(ast) {
         rootStart: node.start, // if chained calls, this != start
         end: node.end,  // end at the end of the full call, including params and inner func.
         arguments: arguments,
-        await: parent && parent.type === 'AwaitExpression',
+        await: !!parent && parent.type === 'AwaitExpression',
         ...(hasLiteralArguments ? { literalArguments } : null),
         ...(apiSyncDisabled ? { apiSyncDisabled } : null),
         ...(apiWaitAfter ? { apiWaitAfter } : null),
